@@ -1,0 +1,21 @@
+name: pr-check
+
+# PR 단계 CI 검증 전용. 이미지가 정상적으로 빌드되는지만 확인하고 ACR push나
+# manifests/ 커밋은 하지 않는다 (그건 main에 merge된 뒤 ci-cd.yml이 담당).
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (validate only, no push)
+        run: |
+          docker build \
+            --build-arg APP_VERSION="pr-${{ github.event.pull_request.number }}" \
+            -t employee-app:pr-check app/

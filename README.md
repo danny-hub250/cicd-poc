@@ -14,16 +14,27 @@ Azure(AKS + ACR) 위에서 **GitHub Actions(CI) + ArgoCD(CD)** 로 소스 변경
 ```mermaid
 flowchart LR
     subgraph GitHub["GitHub: danny-hub250/cicd-poc"]
-        SRC["app/ 소스 변경\n(git push)"]
-        GHA["GitHub Actions\nbuild-and-deploy"]
+        DEV["개발자\nfeature 브랜치에서 app/ 수정"]
+        PR["Pull Request\n(feature → main)"]
+        MAIN["main 브랜치\n(PR merge)"]
         MANI["manifests/\n(Kustomize)"]
-        SRC -->|push main| GHA
-        GHA -->|"이미지 태그 커밋"| MANI
+        DEV -->|PR open| PR
+        PR -->|merge| MAIN
     end
+
+    subgraph CI["CI 영역 (GitHub Actions)"]
+        PRCHECK["pr-check.yml\ndocker build 검증만\n(push/배포 없음)"]
+        BUILD["ci-cd.yml\nbuild-and-deploy"]
+    end
+
+    PR -->|"pull_request 트리거"| PRCHECK
+    PRCHECK -->|"상태 체크 결과"| PR
+    MAIN -->|"push 트리거"| BUILD
+    BUILD -->|"이미지 태그 커밋"| MANI
 
     subgraph Azure["Azure"]
         ACR["ACR\ncicdpocacr"]
-        subgraph AKS["AKS: cicd-poc-aks"]
+        subgraph CD["CD 영역 (AKS: cicd-poc-aks)"]
             ARGO["ArgoCD"]
             APP["employee-app\nDeployment/Service"]
         end
@@ -32,24 +43,30 @@ flowchart LR
         VM["Jumpbox VM\n(kubectl/helm/argocd 운영)"]
     end
 
-    GHA -->|"docker build/push\n(OIDC 로그인)"| ACR
+    BUILD -->|"docker build/push\n(OIDC 로그인)"| ACR
     MANI -->|"git polling"| ARGO
     ARGO -->|"kubectl apply"| APP
     ARGO -.->|"AcrPull(kubelet ID)"| ACR
     APP --> DB
     APP --> FOUNDRY
-    VM -.->|"az aks get-credentials\nArgoCD/시크릿 최초 설치"| AKS
+    VM -.->|"az aks get-credentials\nArgoCD/시크릿 최초 설치"| CD
 ```
+
+`CI 영역`은 GitHub Actions에서 이미지를 빌드/검증/push하고 매니페스트를 갱신하는 부분,
+`CD 영역`은 AKS 안에서 ArgoCD가 git/ACR을 직접 보고 실제 배포를 수행하는 부분입니다.
+두 영역은 git 커밋(=`manifests/`)으로만 연결되고, GitHub Actions가 AKS에 직접 접근하는
+경로는 없습니다.
 
 핵심 설계 포인트:
 
 | 구성 요소 | 방식 | 이유 |
 |---|---|---|
-| GitHub Actions → Azure 로그인 | OIDC federated credential (secret 저장 없음) | client secret을 GitHub에 두지 않기 위함 |
-| GitHub Actions 권한 | ACR에 대한 `AcrPush`만 부여 | AKS에는 직접 접근하지 않음(ArgoCD가 클러스터 내부에서 pull) |
-| 배포 트리거(GitOps) | CI가 `manifests/kustomization.yaml`의 이미지 태그를 커밋 | ArgoCD가 git 변경을 감지해 자동 동기화(표준 GitOps 패턴) |
-| ArgoCD 설치 | jumpbox VM에서 `scripts/argocd-install.sh` 수동 실행 | 기존 `vm-init.sh` 운영 패턴과 동일(수동 스크립트 + 문서화) |
-| AKS → ACR 이미지 pull | kubelet 관리 ID에 `AcrPull` 롤 할당(Terraform) | 이미지 pull secret 관리 불필요 |
+| PR 단계 검증 (CI) | `pull_request` 트리거 시 `pr-check.yml`이 이미지 빌드만 검증, push/배포 없음 | main에 merge되기 전에 빌드 가능 여부를 상태 체크로 확인 |
+| GitHub Actions → Azure 로그인 (CI) | OIDC federated credential (secret 저장 없음) | client secret을 GitHub에 두지 않기 위함 |
+| GitHub Actions 권한 (CI) | ACR에 대한 `AcrPush`만 부여 | AKS에는 직접 접근하지 않음(ArgoCD가 클러스터 내부에서 pull) |
+| 배포 트리거(GitOps, CI→CD 경계) | CI가 `manifests/kustomization.yaml`의 이미지 태그를 커밋 | ArgoCD가 git 변경을 감지해 자동 동기화(표준 GitOps 패턴) |
+| ArgoCD 설치 (CD) | jumpbox VM에서 `scripts/argocd-install.sh` 수동 실행 | 기존 `vm-init.sh` 운영 패턴과 동일(수동 스크립트 + 문서화) |
+| AKS → ACR 이미지 pull (CD) | kubelet 관리 ID에 `AcrPull` 롤 할당(Terraform) | 이미지 pull secret 관리 불필요 |
 
 ## 레포 구성
 
@@ -72,7 +89,8 @@ cicd-poc/
 │   ├── argocd-install.sh       # jumpbox: ArgoCD 설치 + Application 등록
 │   └── create-app-secret.sh    # jumpbox: DB/Foundry 접속정보 k8s Secret 생성
 └── .github/workflows/
-    └── ci-cd.yml                # build-and-deploy 워크플로 (CI+CD 트리거)
+    ├── pr-check.yml             # PR 시 빌드 검증만 (push/배포 없음)
+    └── ci-cd.yml                # main push 시 build-and-deploy (CD 트리거)
 ```
 
 ## 사전 준비물
@@ -239,10 +257,11 @@ git commit --allow-empty -m "test: trigger first build"
 git push
 ```
 
-`app/` 소스를 실제로 고쳐서 push해도 되고(운영에서 하는 방식), 위처럼 빈 커밋으로 최초 1회
-파이프라인 동작만 확인해도 됩니다. GitHub Actions가 이미지를 빌드해 ACR에 push하고,
-`manifests/kustomization.yaml`의 이미지 태그를 커밋합니다. ArgoCD는 기본 3분 polling 주기
-(또는 GitHub webhook 설정 시 즉시)로 이를 감지해 클러스터에 자동 반영합니다.
+최초 동작 확인은 위처럼 `main`에 직접 빈 커밋을 push해도 됩니다. 이후 실제 운영에서는
+**feature 브랜치 → PR → `pr-check.yml`이 빌드 검증(상태 체크) → merge**의 흐름을 권장합니다.
+`main`으로 merge되는 순간 `ci-cd.yml`이 실행되어 이미지를 빌드해 ACR에 push하고,
+`manifests/kustomization.yaml`의 이미지 태그를 커밋합니다(=CD 트리거). ArgoCD는 기본 3분
+polling 주기(또는 GitHub webhook 설정 시 즉시)로 이 커밋을 감지해 클러스터에 자동 반영합니다.
 
 ### 12. 배포 확인 — [jumpbox]
 
@@ -258,22 +277,41 @@ kubectl -n argocd get application employee-app
 ```mermaid
 sequenceDiagram
     participant Dev as 개발자
-    participant GH as GitHub (cicd-poc)
+    participant PR as Pull Request
+    participant GH as GitHub (cicd-poc, main)
     participant GHA as GitHub Actions
     participant ACR as Azure Container Registry
     participant Argo as ArgoCD (in AKS)
     participant K8s as AKS Workload
 
-    Dev->>GH: git push (app/ 변경)
-    GH->>GHA: workflow 트리거
-    GHA->>GHA: OIDC로 Azure 로그인 (secret 없음)
-    GHA->>ACR: docker build & push (:sha, :latest)
-    GHA->>GH: manifests/kustomization.yaml 이미지 태그 커밋
-    loop polling (기본 3분)
-        Argo->>GH: git 변경 확인
+    Dev->>PR: feature 브랜치 push + PR open
+
+    rect rgb(232, 245, 233)
+        note over PR,GHA: CI 영역 - PR 검증
+        PR->>GHA: pull_request 트리거 (pr-check.yml)
+        GHA->>GHA: docker build 검증 (push/배포 없음)
+        GHA-->>PR: 상태 체크 결과 반영
     end
-    Argo->>K8s: kubectl apply -k manifests/ (새 이미지로 rollout)
-    K8s->>ACR: AcrPull (kubelet 관리 ID)
+
+    Dev->>PR: 리뷰 승인 후 merge
+    PR->>GH: main 브랜치에 반영
+
+    rect rgb(232, 245, 233)
+        note over GH,ACR: CI 영역 - 빌드/푸시 (merge 후)
+        GH->>GHA: push 트리거 (ci-cd.yml)
+        GHA->>GHA: OIDC로 Azure 로그인 (secret 없음)
+        GHA->>ACR: docker build & push (:sha, :latest)
+        GHA->>GH: manifests/kustomization.yaml 이미지 태그 커밋
+    end
+
+    rect rgb(227, 242, 253)
+        note over Argo,K8s: CD 영역 - 배포 (ArgoCD, AKS 내부)
+        loop polling (기본 3분)
+            Argo->>GH: git 변경 확인
+        end
+        Argo->>K8s: kubectl apply -k manifests/ (새 이미지로 rollout)
+        K8s->>ACR: AcrPull (kubelet 관리 ID)
+    end
 ```
 
 ## 트러블슈팅

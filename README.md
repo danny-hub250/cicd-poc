@@ -50,6 +50,9 @@ flowchart LR
     APP --> DB
     APP --> FOUNDRY
     VM -.->|"az aks get-credentials\nArgoCD/시크릿 최초 설치"| CD
+
+    style CI fill:#FFE9B3,stroke:#FF8F00,stroke-width:3px,color:#5C3D00
+    style CD fill:#E3D1FA,stroke:#8E24AA,stroke-width:3px,color:#3B0764
 ```
 
 `CI 영역`은 GitHub Actions에서 이미지를 빌드/검증/push하고 매니페스트를 갱신하는 부분,
@@ -286,8 +289,8 @@ sequenceDiagram
 
     Dev->>PR: feature 브랜치 push + PR open
 
-    rect rgb(232, 245, 233)
-        note over PR,GHA: CI 영역 - PR 검증
+    rect rgb(255, 224, 130)
+        note over PR,GHA: 🟧 CI 영역 - PR 검증
         PR->>GHA: pull_request 트리거 (pr-check.yml)
         GHA->>GHA: docker build 검증 (push/배포 없음)
         GHA-->>PR: 상태 체크 결과 반영
@@ -296,16 +299,16 @@ sequenceDiagram
     Dev->>PR: 리뷰 승인 후 merge
     PR->>GH: main 브랜치에 반영
 
-    rect rgb(232, 245, 233)
-        note over GH,ACR: CI 영역 - 빌드/푸시 (merge 후)
+    rect rgb(255, 224, 130)
+        note over GH,ACR: 🟧 CI 영역 - 빌드/푸시 (merge 후)
         GH->>GHA: push 트리거 (ci-cd.yml)
         GHA->>GHA: OIDC로 Azure 로그인 (secret 없음)
         GHA->>ACR: docker build & push (:sha, :latest)
         GHA->>GH: manifests/kustomization.yaml 이미지 태그 커밋
     end
 
-    rect rgb(227, 242, 253)
-        note over Argo,K8s: CD 영역 - 배포 (ArgoCD, AKS 내부)
+    rect rgb(216, 167, 245)
+        note over Argo,K8s: 🟪 CD 영역 - 배포 (ArgoCD, AKS 내부)
         loop polling (기본 3분)
             Argo->>GH: git 변경 확인
         end

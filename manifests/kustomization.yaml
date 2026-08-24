@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+
+# CI가 매 빌드마다 아래 값을 덮어써서 커밋한다:
+#   kustomize edit set image employee-app=<acr_login_server>/employee-app:<tag>
+# 처음 apply할 때는 <ACR_LOGIN_SERVER>를 실제 값(terraform output acr_login_server)으로 바꿔줘야 한다.
+images:
+  - name: employee-app
+    newName: <ACR_LOGIN_SERVER>/employee-app
+    newTag: latest

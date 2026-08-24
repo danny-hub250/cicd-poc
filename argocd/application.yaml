@@ -1,0 +1,29 @@
+# ArgoCD에 이 앱을 등록하는 Application 리소스.
+# ArgoCD 설치 직후, jumpbox에서 딱 한 번만 적용하면 된다:
+#   kubectl apply -f argocd/application.yaml
+#
+# 이후로는 manifests/ 아래 내용이 git에 바뀔 때마다(=CI가 이미지 태그를 커밋할 때마다)
+# ArgoCD가 3분 주기 polling + 이 레포의 webhook(선택)으로 변경을 감지해 자동 동기화한다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: employee-app
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/danny-hub250/cicd-poc.git
+    targetRevision: main
+    path: manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cicd-poc
+
+  syncPolicy:
+    automated:
+      prune: true      # git에서 지워진 리소스는 클러스터에서도 삭제
+      selfHeal: true    # 클러스터를 수동으로 건드려도 git 상태로 되돌림
+    syncOptions:
+      - CreateNamespace=true

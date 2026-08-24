@@ -102,6 +102,7 @@ cicd-poc/
 - Terraform >= 1.6, Azure CLI
 - 이 GitHub 레포(`danny-hub250/cicd-poc`)에 push 권한
 - 인프라 소스가 있는 `terraform-poc` 레포 로컬 체크아웃
+- GitHub CLI(`gh`) — Secrets/Variables 등록에 사용 (설치법은 4단계 참고)
 
 ## 배포 절차
 
@@ -163,6 +164,34 @@ git push -u origin main
 ```
 
 ### 4. GitHub Secrets / Variables 등록 — [로컬] gh CLI
+
+`gh`가 설치되어 있지 않다면 먼저 설치하고 로그인합니다 (1회만 하면 됨):
+
+```powershell
+winget install --id GitHub.cli -e
+```
+
+설치 후 **새 PowerShell 창**을 열어 PATH를 반영시킨 뒤:
+
+```powershell
+gh --version
+gh auth login
+```
+
+`gh auth login` 진행 시 선택 옵션:
+
+1. `What account do you want to log into?` → **GitHub.com**
+2. `What is your preferred protocol for Git operations?` → **HTTPS**
+3. `Authenticate Git with your GitHub credentials?` → **Yes**
+4. `How would you like to authenticate?` → **Login with a web browser** (브라우저에 뜬 one-time code 입력)
+
+로그인 확인:
+
+```powershell
+gh auth status
+```
+
+`Logged in to github.com as danny-hub250`가 뜨면 준비 완료입니다. 이제 Secrets/Variables를 등록합니다.
 
 | 이름 | 종류 | 값 (terraform output) |
 |---|---|---|

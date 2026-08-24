@@ -84,13 +84,29 @@ cicd-poc/
 
 ## 배포 절차
 
-### 1. Azure 인프라 배포 (Terraform)
+각 단계 앞에 실행 위치를 표시했습니다. **[로컬]**은 작업 PC(PowerShell), **[jumpbox]**는
+1단계에서 만든 VM에 SSH로 접속한 뒤(bash) 실행하는 명령입니다. 인프라 소스(`Azure/environments/cicd-poc`)는
+`terraform-poc` 레포에 있으므로, 1~2단계는 그 레포에서 실행합니다.
 
-`terraform-poc` 레포에서:
+### 1. Azure 로그인 + Terraform apply — [로컬] `terraform-poc` 레포
 
 ```powershell
+az login
+az account set --subscription "<subscription-id>"
+
 cd Azure/environments/cicd-poc
-# vm_admin_password / db_admin_password 는 secrets.auto.tfvars 로 별도 관리 (gitignore 대상)
+```
+
+`secrets.auto.tfvars`를 최초 1회 생성합니다 (gitignore 대상, 저장소에 커밋되지 않음):
+
+```powershell
+@"
+vm_admin_password = "<VM 관리자 비밀번호>"
+db_admin_password = "<DB 관리자 비밀번호>"
+"@ | Set-Content -Encoding UTF8 secrets.auto.tfvars
+```
+
+```powershell
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
@@ -100,9 +116,32 @@ terraform apply tfplan
 GitHub Actions OIDC federated credential의 subject(`repo:<repo>:ref:refs/heads/<branch>`)를 결정합니다.
 fork나 다른 브랜치를 쓸 경우 반드시 값을 맞춰야 로그인이 성공합니다.
 
-### 2. GitHub 레포 시크릿/변수 설정
+### 2. 배포 결과 값 확인 — [로컬] 같은 디렉터리
 
-`terraform output`으로 나온 값을 `cicd-poc` 레포의 **Settings → Secrets and variables → Actions**에 등록합니다.
+```powershell
+terraform output -raw acr_login_server
+terraform output -raw github_actions_client_id
+terraform output -raw github_actions_tenant_id
+terraform output -raw github_actions_subscription_id
+terraform output -raw vm_public_ip
+terraform output -raw postgresql_fqdn
+terraform output -raw foundry_endpoint
+terraform output -raw foundry_deployment_name
+terraform output -raw foundry_primary_access_key
+```
+
+아래 단계에서 `<...>` 자리에 여기 나온 값을 그대로 넣습니다.
+
+### 3. 이 레포(cicd-poc) push — [로컬]
+
+```powershell
+cd "<cicd-poc 로컬 경로>"
+git remote add origin https://github.com/danny-hub250/cicd-poc.git
+git branch -M main
+git push -u origin main
+```
+
+### 4. GitHub Secrets / Variables 등록 — [로컬] gh CLI
 
 | 이름 | 종류 | 값 (terraform output) |
 |---|---|---|
@@ -111,76 +150,101 @@ fork나 다른 브랜치를 쓸 경우 반드시 값을 맞춰야 로그인이 �
 | `AZURE_SUBSCRIPTION_ID` | Secret | `github_actions_subscription_id` |
 | `ACR_LOGIN_SERVER` | **Variable** | `acr_login_server` (예: `cicdpocacr.azurecr.io`) |
 
-### 3. Jumpbox 초기화
+```powershell
+gh secret   set AZURE_CLIENT_ID       --repo danny-hub250/cicd-poc --body "<github_actions_client_id>"
+gh secret   set AZURE_TENANT_ID       --repo danny-hub250/cicd-poc --body "<github_actions_tenant_id>"
+gh secret   set AZURE_SUBSCRIPTION_ID --repo danny-hub250/cicd-poc --body "<github_actions_subscription_id>"
+gh variable set ACR_LOGIN_SERVER      --repo danny-hub250/cicd-poc --body "<acr_login_server>"
 
-`terraform output vm_public_ip`로 접속 IP 확인 후:
+# CI가 manifests/를 커밋-백 할 수 있도록 workflow 기본 권한을 write로 변경 (기본값은 read-only)
+gh api --method PUT repos/danny-hub250/cicd-poc/actions/permissions/workflow `
+  -f default_workflow_permissions=write `
+  -F can_approve_pull_request_reviews=false
+```
+
+### 5. Jumpbox 접속 + 기본 초기화 — [로컬 → SSH]
+
+```powershell
+scp "<terraform-poc 로컬 경로>/Azure/scripts/vm-init.sh" azureuser@<vm_public_ip>:~/vm-init.sh
+ssh azureuser@<vm_public_ip>
+```
+
+**[jumpbox]**
+```bash
+bash vm-init.sh
+exit          # docker 그룹 반영을 위해 재접속 필요
+```
+
+```powershell
+ssh azureuser@<vm_public_ip>
+```
+
+### 6. AKS 자격 증명 확보 + 이 레포 clone — [jumpbox]
 
 ```bash
-ssh azureuser@<vm_public_ip>
-# terraform-poc 레포의 Azure/scripts/vm-init.sh 를 jumpbox로 옮겨서 실행
-# (az cli, kubectl, helm, kubelogin, postgresql-client 설치 — 기존 baxpoc 환경과 동일 스크립트)
-bash vm-init.sh
-
 az login
 az aks get-credentials --resource-group cicd-poc-app-rg --name cicd-poc-aks --overwrite-existing
+
+git clone https://github.com/danny-hub250/cicd-poc.git
+cd cicd-poc
 ```
 
-### 4. DB 초기화
-
-`cicd-poc` 레포의 `db/init.sql`을 jumpbox로 옮겨 실행:
+### 7. DB 초기화 — [jumpbox]
 
 ```bash
-psql "host=<postgresql_fqdn> port=5432 dbname=postgres user=psqladmin sslmode=require" -f init.sql
+psql "host=<postgresql_fqdn> port=5432 dbname=postgres user=psqladmin sslmode=require" -f db/init.sql
+# 프롬프트에서 db_admin_password 입력
 ```
 
-`<postgresql_fqdn>`은 `terraform output postgresql_fqdn`, 비밀번호는 `db_admin_password`(secrets.auto.tfvars)입니다.
-
-### 5. App Secret 생성
-
-`cicd-poc` 레포를 jumpbox에 clone(또는 scripts/ 만 복사)한 뒤:
+### 8. App Secret 생성 — [jumpbox]
 
 ```bash
-DB_HOST=<terraform output postgresql_fqdn> \
+DB_HOST=<postgresql_fqdn> \
 DB_PASSWORD=<db_admin_password> \
-FOUNDRY_ENDPOINT=<terraform output foundry_endpoint> \
-FOUNDRY_API_KEY=<terraform output foundry_primary_access_key> \
-FOUNDRY_DEPLOYMENT=<terraform output foundry_deployment_name> \
+FOUNDRY_ENDPOINT=<foundry_endpoint> \
+FOUNDRY_API_KEY=<foundry_primary_access_key> \
+FOUNDRY_DEPLOYMENT=<foundry_deployment_name> \
 ./scripts/create-app-secret.sh
 ```
 
-### 6. ArgoCD 설치 + Application 등록
+### 9. ACR 값 반영 + push — [jumpbox]
 
-먼저 `manifests/kustomization.yaml`의 `<ACR_LOGIN_SERVER>` 플레이스홀더를 실제 값으로 바꿔
-커밋합니다(최초 1회. 이후로는 CI가 이 파일을 계속 갱신합니다):
+`manifests/kustomization.yaml`의 `<ACR_LOGIN_SERVER>` 플레이스홀더를 실제 값으로 바꿔 커밋합니다
+(최초 1회만 수동으로 하면, 이후로는 CI가 이 파일을 계속 갱신합니다):
 
 ```bash
-sed -i "s|<ACR_LOGIN_SERVER>|$(terraform output -raw acr_login_server)|" manifests/kustomization.yaml
-git add manifests/kustomization.yaml && git commit -m "chore: set ACR login server" && git push
+sed -i "s|<ACR_LOGIN_SERVER>|<acr_login_server>|" manifests/kustomization.yaml
+git config user.name "DannyLee"
+git config user.email "danny-hub250@users.noreply.github.com"
+git add manifests/kustomization.yaml
+git commit -m "chore: set ACR login server"
+git push   # GitHub 인증 필요 (PAT 입력 또는 사전에 gh auth login)
 ```
 
-그 다음 jumpbox에서:
+### 10. ArgoCD 설치 + Application 등록 — [jumpbox]
 
 ```bash
 ./scripts/argocd-install.sh
 ```
 
 `argocd-install.sh`는 ArgoCD 설치 → `argocd-server`를 LoadBalancer로 노출 → 초기 admin 비밀번호 출력 →
-`argocd/application.yaml` 등록까지 한 번에 수행합니다.
+`argocd/application.yaml` 등록까지 한 번에 수행합니다. 출력되는 admin 비밀번호와 LoadBalancer IP를
+메모해둡니다.
 
-### 7. 첫 배포 트리거
+### 11. 첫 CI/CD 트리거 — [로컬]
 
-`app/` 아래 아무 파일이나 수정해서 `main` 브랜치에 push (또는 Actions 탭에서 워크플로 수동 실행):
-
-```bash
+```powershell
+cd "<cicd-poc 로컬 경로>"
 git commit --allow-empty -m "test: trigger first build"
 git push
 ```
 
-GitHub Actions가 이미지를 빌드해 ACR에 push하고, `manifests/kustomization.yaml`의 이미지 태그를
-커밋합니다. ArgoCD는 기본 3분 polling 주기(또는 GitHub webhook 설정 시 즉시)로 이를 감지해
-클러스터에 자동 반영합니다.
+`app/` 소스를 실제로 고쳐서 push해도 되고(운영에서 하는 방식), 위처럼 빈 커밋으로 최초 1회
+파이프라인 동작만 확인해도 됩니다. GitHub Actions가 이미지를 빌드해 ACR에 push하고,
+`manifests/kustomization.yaml`의 이미지 태그를 커밋합니다. ArgoCD는 기본 3분 polling 주기
+(또는 GitHub webhook 설정 시 즉시)로 이를 감지해 클러스터에 자동 반영합니다.
 
-### 8. 동작 확인
+### 12. 배포 확인 — [jumpbox]
 
 ```bash
 kubectl -n cicd-poc get svc employee-app
@@ -216,7 +280,7 @@ sequenceDiagram
 
 - **`az acr login` / push 403** — Terraform apply 후 role assignment 전파에 수 분 걸릴 수 있음. 재시도.
 - **ArgoCD Application이 `OutOfSync`에서 안 넘어감** — `manifests/kustomization.yaml`의
-  `newName`에 `<ACR_LOGIN_SERVER>` 플레이스홀더가 그대로 남아있는지 확인(2단계 6번 참고).
+  `newName`에 `<ACR_LOGIN_SERVER>` 플레이스홀더가 그대로 남아있는지 확인(9단계 참고).
 - **Pod가 `ImagePullBackOff`** — `az aks show -g cicd-poc-app-rg -n cicd-poc-aks --query
   identityProfile` 로 kubelet identity 확인 후, ACR에 `AcrPull` 롤이 실제로 붙었는지
   `az role assignment list --scope <acr_id>`로 확인 (Terraform의 `aks_acr_pull` 리소스).

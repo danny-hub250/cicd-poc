@@ -12,4 +12,4 @@ resources:
 images:
   - name: employee-app
     newName: cicdpocacr08.azurecr.io/employee-app
-    newTag: 93dc7f2
+    newTag: 91494ca

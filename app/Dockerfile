@@ -12,4 +12,6 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
 EXPOSE 8080
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"]
+# CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "--workers", "2", "--threads", "4", "--timeout", "60", "app:app"]
+

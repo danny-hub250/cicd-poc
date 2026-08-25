@@ -41,7 +41,9 @@ def healthz():
 def index():
     rows = get_employees()
     html = ["<html><head><meta charset='UTF-8'><title>Employee List</title></head><body style='font-family:sans-serif; max-width:700px; margin:40px auto;'>"]
-    html.append("<h1>Employee List</h1>")
+    # html.append("<h1>Employee List</h1>")
+    html.append("<h1 style='color:#2563eb;'>🚀 Employee List 🚀🚀(v2)</h1>")
+
     html.append("<table border='1' cellpadding='6' cellspacing='0'>")
     html.append("<tr><th>Last Name</th><th>First Name</th><th>Title</th></tr>")
     for lastname, firstname, title in rows:

@@ -7,7 +7,11 @@ echo ">>> Creating argocd namespace..."
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
 echo ">>> Installing ArgoCD (stable manifests)..."
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# server-side apply 사용: client-side apply는 last-applied-configuration 어노테이션에
+# 전체 매니페스트를 저장하는데, applicationsets.argoproj.io CRD가 커서 256KiB 어노테이션
+# 제한을 넘어 실패한다 (metadata.annotations: Too long).
+kubectl apply --server-side --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 echo ">>> Waiting for argocd-server rollout..."
 kubectl -n argocd rollout status deploy/argocd-server --timeout=300s

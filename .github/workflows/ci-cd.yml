@@ -22,7 +22,14 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      # main이 ruleset으로 보호돼 있어 기본 GITHUB_TOKEN(actor: github-actions[bot])으로는
+      # "Commit and push manifest update" 단계의 직접 push가 막힌다. repo admin(danny-hub250)
+      # 소유의 PAT로 checkout해서, 이후 git push가 admin 자격으로 나가 ruleset bypass가 적용되게 한다.
+      # (Settings > Secrets and variables > Actions 에 GH_PUSH_TOKEN 등록 필요, ruleset의
+      #  bypass list에 Repository admin 추가 필요)
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PUSH_TOKEN }}
 
       # 시크릿(client secret) 없이 GitHub OIDC 토큰 <-> Azure 관리 ID 교환으로 로그인.
       # Azure 쪽 federated credential은 Azure/environments/cicd-poc의

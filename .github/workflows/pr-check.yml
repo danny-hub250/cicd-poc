@@ -2,11 +2,14 @@ name: pr-check
 
 # PR 단계 CI 검증 전용. 이미지가 정상적으로 빌드되는지만 확인하고 ACR push나
 # manifests/ 커밋은 하지 않는다 (그건 main에 merge된 뒤 ci-cd.yml이 담당).
+#
+# paths 필터를 두지 않고 모든 PR에서 실행한다: main의 ruleset이 이 워크플로의
+# build-check job을 required status check로 요구하는데, paths로 제한하면
+# README/manifests 같은 app/** 밖 변경만 있는 PR은 이 체크 자체가 안 돌아서
+# "Waiting for status to be reported" 상태로 영원히 merge가 막힌다.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "app/**"
 
 jobs:
   build-check:

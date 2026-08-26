@@ -18,8 +18,8 @@ flowchart LR
         PR["Pull Request\n(feature → main)"]
         MAIN["main 브랜치\n(PR merge)"]
         MANI["manifests/\n(Kustomize)"]
-        DEV -->|PR open| PR
-        PR -->|merge| MAIN
+        DEV -->|"① PR open"| PR
+        PR -->|"④ merge"| MAIN
     end
 
     subgraph CI["CI 영역 (GitHub Actions)"]
@@ -27,10 +27,10 @@ flowchart LR
         BUILD["ci-cd.yml\nbuild-and-deploy"]
     end
 
-    PR -->|"pull_request 트리거"| PRCHECK
-    PRCHECK -->|"상태 체크 결과"| PR
-    MAIN -->|"push 트리거"| BUILD
-    BUILD -->|"이미지 태그 커밋"| MANI
+    PR -->|"② pull_request 트리거"| PRCHECK
+    PRCHECK -->|"③ 상태 체크 결과"| PR
+    MAIN -->|"⑤ push 트리거"| BUILD
+    BUILD -->|"⑦ 이미지 태그 커밋"| MANI
 
     subgraph Azure["Azure"]
         ACR["ACR\ncicdpocacr"]
@@ -43,13 +43,13 @@ flowchart LR
         VM["Jumpbox VM\n(kubectl/helm/argocd 운영)"]
     end
 
-    BUILD -->|"docker build/push\n(OIDC 로그인)"| ACR
-    MANI -->|"git polling"| ARGO
-    ARGO -->|"kubectl apply"| APP
+    BUILD -->|"⑥ docker build/push\n(OIDC 로그인)"| ACR
+    MANI -->|"⑧ git polling"| ARGO
+    ARGO -->|"⑨ kubectl apply"| APP
     ARGO -.->|"AcrPull(kubelet ID)"| ACR
     APP --> DB
     APP --> FOUNDRY
-    VM -.->|"az aks get-credentials\nArgoCD/시크릿 최초 설치"| CD
+    VM -.->|"az aks get-credentials\nArgoCD/시크릿 최초 설치 (사전 1회)"| CD
 
     style CI fill:#FFE9B3,stroke:#FF8F00,stroke-width:3px,color:#5C3D00
     style CD fill:#E3D1FA,stroke:#8E24AA,stroke-width:3px,color:#3B0764
@@ -59,6 +59,22 @@ flowchart LR
 `CD 영역`은 AKS 안에서 ArgoCD가 git/ACR을 직접 보고 실제 배포를 수행하는 부분입니다.
 두 영역은 git 커밋(=`manifests/`)으로만 연결되고, GitHub Actions가 AKS에 직접 접근하는
 경로는 없습니다.
+
+### 배포 흐름 (①~⑨)
+
+한 번의 소스 변경이 실제 배포까지 이어지는 순서입니다 (다이어그램의 번호와 대응):
+
+1. **① PR open** — 개발자가 `feature` 브랜치에서 `app/`을 수정하고 `main`으로 PR을 엽니다.
+2. **② pull_request 트리거** — `pr-check.yml`이 실행되어 이미지가 정상적으로 빌드되는지만 검증합니다 (push/배포 없음).
+3. **③ 상태 체크 결과** — 검증 결과가 PR의 상태 체크로 반영됩니다. 통과해야 merge할 수 있습니다.
+4. **④ merge** — PR이 `main`에 merge됩니다.
+5. **⑤ push 트리거** — `main`에 대한 push가 `ci-cd.yml`(`build-and-deploy`)을 실행시킵니다.
+6. **⑥ docker build/push** — OIDC로 Azure에 로그인한 뒤 이미지를 빌드해서 ACR(`cicdpocacr`)에 push합니다.
+7. **⑦ 이미지 태그 커밋** — 새로 빌드된 이미지 태그를 `manifests/kustomization.yaml`에 반영해 `main`에 커밋합니다 (CI→CD 경계, GitOps 트리거).
+8. **⑧ git polling** — ArgoCD가 이 커밋을 감지합니다 (기본 폴링 주기, `argocd-cm`의 `timeout.reconciliation`으로 조정 가능).
+9. **⑨ kubectl apply** — ArgoCD가 변경된 매니페스트를 클러스터에 적용해 `employee-app`을 새 이미지로 배포합니다.
+
+점선으로 표시된 `AcrPull`(kubelet의 이미지 pull), `employee-app → DB/Foundry`(런타임 의존성), `Jumpbox VM → CD 영역`(ArgoCD/시크릿 최초 설치)은 매 배포마다 반복되는 순서가 아니라 상시 연결 또는 최초 1회성 작업이라 번호에서 제외했습니다.
 
 핵심 설계 포인트:
 
